@@ -1,51 +1,54 @@
-############
-# IAM users
-############
-module "iam_user1" {
-  source = "../../modules/iam-user"
+resource "aws_iam_user" "this" {
+  count = var.create_user ? 1 : 0
 
-  name = "user1"
+  name                 = var.name
+  path                 = var.path
+  force_destroy        = var.force_destroy
+  permissions_boundary = var.permissions_boundary
 
-  create_iam_user_login_profile = false
-  create_iam_access_key         = false
+  tags = var.tags
 }
 
-module "iam_user2" {
-  source = "../../modules/iam-user"
+resource "aws_iam_user_login_profile" "this" {
+  count = var.create_user && var.create_iam_user_login_profile ? 1 : 0
 
-  name = "user2"
+  user                    = aws_iam_user.this[0].name
+  pgp_key                 = var.pgp_key
+  password_length         = var.password_length
+  password_reset_required = var.password_reset_required
 
-  create_iam_user_login_profile = false
-  create_iam_access_key         = false
+  # TODO: Remove once https://github.com/hashicorp/terraform-provider-aws/issues/23567 is resolved
+  lifecycle {
+    ignore_changes = [password_reset_required]
+  }
 }
 
-#############################################################################################
-# IAM group where user1 and user2 are allowed to assume admin role in production AWS account
-#############################################################################################
-module "iam_group_complete" {
-  source = "../../modules/iam-group-with-assumable-roles-policy"
+resource "aws_iam_access_key" "this" {
+  count = var.create_user && var.create_iam_access_key && var.pgp_key != "" ? 1 : 0
 
-  name = "production-admins"
-
-  assumable_roles = ["arn:aws:iam::111111111111:role/admin"]
-
-  group_users = [
-    module.iam_user1.iam_user_name,
-    module.iam_user2.iam_user_name,
-  ]
+  user    = aws_iam_user.this[0].name
+  pgp_key = var.pgp_key
+  status  = var.iam_access_key_status
 }
 
-####################################################
-# Extending policies of IAM group production-admins
-####################################################
-module "iam_group_complete_with_custom_policy" {
-  source = "../../modules/iam-group-with-policies"
+resource "aws_iam_access_key" "this_no_pgp" {
+  count = var.create_user && var.create_iam_access_key && var.pgp_key == "" ? 1 : 0
 
-  name = module.iam_group_complete.group_name
+  user   = aws_iam_user.this[0].name
+  status = var.iam_access_key_status
+}
 
-  create_group = false
+resource "aws_iam_user_ssh_key" "this" {
+  count = var.create_user && var.upload_iam_user_ssh_key ? 1 : 0
 
-  custom_group_policy_arns = [
-    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
-  ]
+  username   = aws_iam_user.this[0].name
+  encoding   = var.ssh_key_encoding
+  public_key = var.ssh_public_key
+}
+
+resource "aws_iam_user_policy_attachment" "this" {
+  for_each = { for k, v in var.policy_arns : k => v if var.create_user }
+
+  user       = aws_iam_user.this[0].name
+  policy_arn = each.value
 }
